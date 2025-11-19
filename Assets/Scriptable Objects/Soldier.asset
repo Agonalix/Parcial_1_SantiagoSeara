@@ -19,4 +19,4 @@ MonoBehaviour:
   eyeHeight: 1.7
   obstructionMask:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 64
