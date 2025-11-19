@@ -9,40 +9,40 @@ public class ThirdPersonController : MonoBehaviour
     public float gravity = -9.81f;
 
     [Header("Refs")]
-    public Transform cameraPivot; // arrastrá el CameraPivot del Player
+    public Transform cameraPivot;
 
     [Header("Crouch")]
     [Tooltip("Porcentaje de velocidad al agacharse (0.75 = 75%)")]
     public float crouchSpeedMultiplier = 0.75f;
-    [Tooltip("Multiplicador de altura del CharacterController al agacharse (0.5 = mitad)")]
-    public float crouchHeightMultiplier = 0.5f;
+    [Tooltip("Multiplicador de escala/altura al agacharse (0.5 = mitad)")]
+    public float crouchScaleMultiplier = 0.5f;
 
     CharacterController cc;
     Vector3 velocity;
 
     bool isCrouching;
+
     float originalMoveSpeed;
     float originalHeight;
     Vector3 originalCenter;
+    Vector3 originalScale;
 
     void Awake()
     {
         cc = GetComponent<CharacterController>();
 
-        // Guardamos valores originales
         originalMoveSpeed = moveSpeed;
         originalHeight = cc.height;
         originalCenter = cc.center;
+        originalScale = transform.localScale;
     }
 
     void Update()
     {
-        // --- INPUT DE MOVIMIENTO ---
         float h = Input.GetAxisRaw("Horizontal");
         float v = Input.GetAxisRaw("Vertical");
         Vector3 input = new Vector3(h, 0f, v).normalized;
 
-        // --- INPUT DE AGACHARSE (C o Ctrl) ---
         bool crouchKey =
             Input.GetKey(KeyCode.C) ||
             Input.GetKey(KeyCode.LeftControl) ||
@@ -50,7 +50,6 @@ public class ThirdPersonController : MonoBehaviour
 
         SetCrouch(crouchKey);
 
-        // --- DIRECCIÓN SEGÚN CÁMARA ---
         Vector3 moveDir = Vector3.zero;
         if (cameraPivot != null)
         {
@@ -58,12 +57,8 @@ public class ThirdPersonController : MonoBehaviour
             Vector3 camRight = cameraPivot.right; camRight.y = 0f; camRight.Normalize();
             moveDir = (camFwd * input.z + camRight * input.x).normalized;
         }
-        else
-        {
-            moveDir = input;
-        }
+        else moveDir = input;
 
-        // --- ROTACIÓN DEL PLAYER ---
         if (moveDir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(moveDir, Vector3.up);
@@ -74,10 +69,8 @@ public class ThirdPersonController : MonoBehaviour
             );
         }
 
-        // --- MOVIMIENTO HORIZONTAL ---
         cc.Move(moveDir * moveSpeed * Time.deltaTime);
 
-        // --- GRAVEDAD ---
         if (cc.isGrounded && velocity.y < 0f) velocity.y = -2f;
         velocity.y += gravity * Time.deltaTime;
         cc.Move(velocity * Time.deltaTime);
@@ -91,21 +84,31 @@ public class ThirdPersonController : MonoBehaviour
 
         if (isCrouching)
         {
-            // Velocidad reducida 25% → queda al 75%
+            // 1) Escala visual ↓
+            transform.localScale = new Vector3(
+                originalScale.x,
+                originalScale.y * crouchScaleMultiplier,
+                originalScale.z
+            );
+
+            // 2) Velocidad ↓
             moveSpeed = originalMoveSpeed * crouchSpeedMultiplier;
 
-            // Altura del collider a la mitad
-            cc.height = originalHeight * crouchHeightMultiplier;
+            // 3) Collider ↓
+            cc.height = originalHeight * crouchScaleMultiplier;
 
-            // Ajustamos el centro para que no se hunda tanto
+            // Ajuste del center para que no flote
             cc.center = new Vector3(
                 originalCenter.x,
-                originalCenter.y * crouchHeightMultiplier,
+                originalCenter.y * crouchScaleMultiplier,
                 originalCenter.z
             );
         }
         else
         {
+            // restaurar escala
+            transform.localScale = originalScale;
+
             moveSpeed = originalMoveSpeed;
             cc.height = originalHeight;
             cc.center = originalCenter;

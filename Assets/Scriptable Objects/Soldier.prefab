@@ -190,7 +190,7 @@ GameObject:
   - component: {fileID: 7431833537601554860}
   - component: {fileID: 1070147191983179978}
   m_Layer: 0
-  m_Name: Enemy
+  m_Name: Soldier
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
