@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using UnityEngine;
 using TMPro;
-
 public class Enemy : MonoBehaviour
 {
     public enum State { Normal, Chase, Damage, Dead }
@@ -21,10 +20,19 @@ public class Enemy : MonoBehaviour
     public float textHeight = 2f;
 
     float health;
-    bool hasDetectedPlayer = false;  // IMPORTANTE → si detectó una vez, persigue siempre
+    bool hasDetectedPlayer = false;  // si detectó una vez, persigue siempre
 
-    [SerializeField] float gravity = -9.81f;
-    Vector3 verticalVelocity;    // para acumular caída
+    // Rigidbody
+    Rigidbody rb;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody>();
+        if (rb == null)
+        {
+            Debug.LogError("Enemy necesita un Rigidbody en el mismo GameObject.");
+        }
+    }
 
     void Start()
     {
@@ -49,47 +57,25 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
-        bool grounded = Physics.Raycast(
-    transform.position + Vector3.up * 0.2f,
-    Vector3.down,
-    out RaycastHit groundHit,
-    0.3f,
-    LayerMask.GetMask("Default", "Environment")
-);
-        if (grounded && verticalVelocity.y < 0)
+        if (state == State.Dead)
         {
-            verticalVelocity.y = -2f; // mismo truco que el player
-        }
-        else
-        {
-            verticalVelocity.y += gravity * Time.deltaTime;
-        }
-
-        if (state == State.Dead) return;
-
-        // siempre mira la UI hacia la cámara
-        if (stateText != null)
-        {
-            var cam = Camera.main;
-            if (cam != null)
-            {
-                stateText.transform.position = transform.position + Vector3.up * textHeight;
-                stateText.transform.rotation = Quaternion.LookRotation(
-                    stateText.transform.position - cam.transform.position
-                );
-            }
-        }
-        if (state == State.Damage)
-        {
-            // mostrar “damage” durante 0.1s y NO hacer nada más
+            // solo mantenemos el texto mirando a la cámara
+            FaceTextToCamera();
             return;
         }
+
+        // siempre mira la UI hacia la cámara
+        FaceTextToCamera();
+
+        // si está en Damage, no hacemos lógica de IA
+        if (state == State.Damage)
+            return;
+
         // si ya detectó una vez → siempre persigue
         if (hasDetectedPlayer)
         {
             if (state != State.Chase) SetState(State.Chase);
-            ChasePlayer();
-            return;
+            return; // el movimiento lo hacemos en FixedUpdate
         }
 
         // si todavía no detectó
@@ -100,51 +86,50 @@ public class Enemy : MonoBehaviour
             hasDetectedPlayer = true;
             SetState(State.Chase);
         }
+    }
 
-        if (state == State.Chase)
+    void FixedUpdate()
+    {
+        if (state == State.Chase && player != null && state != State.Dead)
         {
             ChasePlayer();
         }
     }
 
-    // --- MOVIMIENTO DE PERSECUCIÓN ---
+    void FaceTextToCamera()
+    {
+        if (stateText == null) return;
+
+        var cam = Camera.main;
+        if (cam != null)
+        {
+            stateText.transform.position = transform.position + Vector3.up * textHeight;
+            stateText.transform.rotation = Quaternion.LookRotation(
+                stateText.transform.position - cam.transform.position
+            );
+        }
+    }
+
+    // --- MOVIMIENTO DE PERSECUCIÓN (con Rigidbody) ---
     void ChasePlayer()
     {
-        if (player == null) return;
+        if (rb == null || player == null) return;
 
-        Vector3 dir = player.position - transform.position;
-        dir.y = 0f;
+        // Vector hacia el jugador PERMANENTE y sin frenar
+        Vector3 toPlayer = player.position - transform.position;
+        toPlayer.y = 0f; // no saltar
 
-        Vector3 move = dir.normalized * data.moveSpeed * Time.deltaTime;
+        // si está extremadamente cerca, seguir igualmente
+        Vector3 dir = toPlayer.normalized;
 
-        // sumar gravedad
-        move += verticalVelocity * Time.deltaTime;
+        // velocidad constante hacia el jugador
+        rb.linearVelocity = new Vector3(dir.x * data.moveSpeed, rb.linearVelocity.y, dir.z * data.moveSpeed);
 
-        Vector3 nextPos = transform.position + move;
-
-        // Si no hay colisión, moverse
-        if (CanMoveTo(nextPos))
+        // rota hacia el jugador
+        if (dir.sqrMagnitude > 0.0001f)
         {
-            transform.position = nextPos;
+            transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
         }
-        else
-        {
-            // SLIDE: intentá moverte sin penetrar paredes
-            // cancelamos X o Z según dónde esté bloqueado
-
-            // probar mover solo en X
-            Vector3 slideX = new Vector3(move.x, 0, 0);
-            if (CanMoveTo(transform.position + slideX))
-                transform.position += slideX;
-
-            // probar mover solo en Z
-            Vector3 slideZ = new Vector3(0, 0, move.z);
-            if (CanMoveTo(transform.position + slideZ))
-                transform.position += slideZ;
-        }
-
-        if (dir.sqrMagnitude > 0.01f)
-            transform.rotation = Quaternion.LookRotation(dir.normalized, Vector3.up);
     }
 
     // --- VISIÓN: CONO + RAYCAST DE OBSTRUCCIÓN ---
@@ -209,12 +194,19 @@ public class Enemy : MonoBehaviour
         // Desactivar mesh del enemigo, pero NO el texto
         foreach (var r in GetComponentsInChildren<Renderer>())
         {
-            if (r.gameObject != stateText.gameObject)
-                r.enabled = false;
+            if (stateText != null && r.gameObject == stateText.gameObject) continue;
+            r.enabled = false;
         }
 
         foreach (var c in GetComponentsInChildren<Collider>())
             c.enabled = false;
+
+        if (rb != null)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            rb.isKinematic = true;
+        }
 
         // Ocultar el texto después de 3 segundos
         StartCoroutine(HideStateTextAfterDelay());
@@ -257,25 +249,10 @@ public class Enemy : MonoBehaviour
             Gizmos.DrawLine(eye, eye + dir.normalized * data.viewDistance);
         }
     }
+
     IEnumerator HideStateTextAfterDelay()
     {
         yield return new WaitForSeconds(3f);
         if (stateText != null) stateText.gameObject.SetActive(false);
-    }
-
-    bool CanMoveTo(Vector3 targetPos)
-    {
-        // chequeo si hay algo entre el enemigo y el punto a mover
-        if (Physics.CheckCapsule(
-            transform.position + Vector3.up * 0.5f,
-            transform.position + Vector3.up * 1.5f,
-            0.35f,   // radio del capsule
-            LayerMask.GetMask("Environment")
-        ))
-        {
-            return false;
-        }
-
-        return true;
     }
 }
