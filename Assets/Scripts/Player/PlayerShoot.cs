@@ -60,15 +60,16 @@ public class PlayerShoot : MonoBehaviour
 
     void TryReload()
     {
-        // Si el cargador ya está lleno, no hace nada
+        // Si el cargador está lleno → NO hacer absolutamente nada
         if (bulletsInMag >= magSize)
         {
-            Debug.Log("Cargador ya lleno.");
+            Debug.Log("No puedo recargar porque el cargador está completo.");
             return;
         }
 
-        // Cargadores infinitos: simplemente rellenamos el cargador
+        // Cargadores infinitos: simplemente rellenamos
         bulletsInMag = magSize;
+
         Debug.Log("Recarga completa.");
 
         UpdateAmmoUI();

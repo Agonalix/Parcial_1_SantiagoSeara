@@ -23,6 +23,9 @@ public class Enemy : MonoBehaviour
     float health;
     bool hasDetectedPlayer = false;  // IMPORTANTE → si detectó una vez, persigue siempre
 
+    [SerializeField] float gravity = -9.81f;
+    Vector3 verticalVelocity;    // para acumular caída
+
     void Start()
     {
         if (data == null)
@@ -46,6 +49,22 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
+        bool grounded = Physics.Raycast(
+    transform.position + Vector3.up * 0.2f,
+    Vector3.down,
+    out RaycastHit groundHit,
+    0.3f,
+    LayerMask.GetMask("Default", "Environment")
+);
+        if (grounded && verticalVelocity.y < 0)
+        {
+            verticalVelocity.y = -2f; // mismo truco que el player
+        }
+        else
+        {
+            verticalVelocity.y += gravity * Time.deltaTime;
+        }
+
         if (state == State.Dead) return;
 
         // siempre mira la UI hacia la cámara
@@ -60,7 +79,11 @@ public class Enemy : MonoBehaviour
                 );
             }
         }
-
+        if (state == State.Damage)
+        {
+            // mostrar “damage” durante 0.1s y NO hacer nada más
+            return;
+        }
         // si ya detectó una vez → siempre persigue
         if (hasDetectedPlayer)
         {
@@ -92,7 +115,33 @@ public class Enemy : MonoBehaviour
         Vector3 dir = player.position - transform.position;
         dir.y = 0f;
 
-        transform.position += dir.normalized * data.moveSpeed * Time.deltaTime;
+        Vector3 move = dir.normalized * data.moveSpeed * Time.deltaTime;
+
+        // sumar gravedad
+        move += verticalVelocity * Time.deltaTime;
+
+        Vector3 nextPos = transform.position + move;
+
+        // Si no hay colisión, moverse
+        if (CanMoveTo(nextPos))
+        {
+            transform.position = nextPos;
+        }
+        else
+        {
+            // SLIDE: intentá moverte sin penetrar paredes
+            // cancelamos X o Z según dónde esté bloqueado
+
+            // probar mover solo en X
+            Vector3 slideX = new Vector3(move.x, 0, 0);
+            if (CanMoveTo(transform.position + slideX))
+                transform.position += slideX;
+
+            // probar mover solo en Z
+            Vector3 slideZ = new Vector3(0, 0, move.z);
+            if (CanMoveTo(transform.position + slideZ))
+                transform.position += slideZ;
+        }
 
         if (dir.sqrMagnitude > 0.01f)
             transform.rotation = Quaternion.LookRotation(dir.normalized, Vector3.up);
@@ -155,13 +204,20 @@ public class Enemy : MonoBehaviour
     void Die()
     {
         state = State.Dead;
-        UpdateStateUI();
+        UpdateStateUI(); // muestra "dead"
 
-        // desactivar render/collider
+        // Desactivar mesh del enemigo, pero NO el texto
         foreach (var r in GetComponentsInChildren<Renderer>())
-            r.enabled = false;
+        {
+            if (r.gameObject != stateText.gameObject)
+                r.enabled = false;
+        }
+
         foreach (var c in GetComponentsInChildren<Collider>())
             c.enabled = false;
+
+        // Ocultar el texto después de 3 segundos
+        StartCoroutine(HideStateTextAfterDelay());
     }
 
     // --- ESTADOS ---
@@ -200,5 +256,26 @@ public class Enemy : MonoBehaviour
             Vector3 dir = rot * transform.forward;
             Gizmos.DrawLine(eye, eye + dir.normalized * data.viewDistance);
         }
+    }
+    IEnumerator HideStateTextAfterDelay()
+    {
+        yield return new WaitForSeconds(3f);
+        if (stateText != null) stateText.gameObject.SetActive(false);
+    }
+
+    bool CanMoveTo(Vector3 targetPos)
+    {
+        // chequeo si hay algo entre el enemigo y el punto a mover
+        if (Physics.CheckCapsule(
+            transform.position + Vector3.up * 0.5f,
+            transform.position + Vector3.up * 1.5f,
+            0.35f,   // radio del capsule
+            LayerMask.GetMask("Environment")
+        ))
+        {
+            return false;
+        }
+
+        return true;
     }
 }
