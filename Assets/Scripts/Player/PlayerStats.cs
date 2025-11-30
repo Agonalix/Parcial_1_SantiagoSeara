@@ -62,6 +62,50 @@ public class PlayerStats : MonoBehaviour
             regenTimer = 0f;
             if (stamina < maxStamina) stamina += 1;
         }
+
+        // CHECK DE MUERTE
+        if (health <= 0)
+        {
+            Die();
+        }
+
+        // REAPARECER CON F1
+        if (Input.GetKeyDown(KeyCode.F1))
+        {
+            RespawnPlayer();
+        }
+
+        // REINICIAR ESCENA CON F2
+        if (Input.GetKeyDown(KeyCode.F2))
+        {
+            UnityEngine.SceneManagement.SceneManager.LoadScene(
+                UnityEngine.SceneManagement.SceneManager.GetActiveScene().name
+            );
+        }
+    }
+    void Die()
+    {
+        Debug.Log("☠ Jugador MUERTO");
+
+        // Inmovilizamos al personaje
+        var cc = GetComponent<CharacterController>();
+        if (cc != null) cc.enabled = false;
+    }
+
+    void RespawnPlayer()
+    {
+        Debug.Log("↻ Jugador reapareció");
+
+        // Restauramos valores
+        health = maxHealth;
+        stamina = maxStamina;
+
+        // Reposicionar al jugador (punto 0,0,0 o donde quieras)
+        transform.position = Vector3.zero;
+
+        // Reactivamos movement
+        var cc = GetComponent<CharacterController>();
+        if (cc != null) cc.enabled = true;
     }
 
     public void PauseRegen(bool pause)

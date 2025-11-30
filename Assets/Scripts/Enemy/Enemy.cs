@@ -1,17 +1,16 @@
 ﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
 
 public class Enemy : MonoBehaviour
 {
-    public enum State { Patrol, Normal, Chase, Alert, Damage, Dead }
+    public enum State { Normal, Patrol, Chase, Damage, Dead }
 
-    [Header("Config")]
+    [Header("Config (ScriptableObject)")]
     public Soldier data;
 
     [Header("Estado actual")]
-    public State state = State.Patrol;
+    public State state = State.Normal;
 
     [Header("Referencias")]
     public Transform player;
@@ -21,39 +20,34 @@ public class Enemy : MonoBehaviour
     public TextMeshPro stateText;
     public float textHeight = 2f;
 
-    [Header("Patrulla")]
-    public Transform[] patrolPoints;
-    int patrolIndex = 0;
-    public float patrolWaitTime = 1f;
-    float patrolWaitTimer;
-
     [Header("Ataque")]
-    public float attackRange = 1.5f;
-    public int damagePerHit = 10;
-    public float attackCooldown = 1f;
-    float attackTimer;
+    public float attackDamage = 10f;
+    public float attackRate = 1.2f;  // 1 golpe cada 1.2 segundos
+    public float attackRange = 1.5f; // distancia a la que puede golpear
+    float nextAttackTime;
+
+    float health;
+    bool hasDetectedPlayer = false;
 
     Rigidbody rb;
-    float health;
-    bool hasDetectedOnce = false;
-
-    // ALERTA GLOBAL
-    public static bool globalAlert = false;
 
     void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        if (rb == null)
-            Debug.LogError("Enemy necesita Rigidbody");
 
-        rb.freezeRotation = true;
+        EnemyGlobalAlertSystem.Register(this);  // ← Registro global
+    }
+
+    void OnDestroy()
+    {
+        EnemyGlobalAlertSystem.Unregister(this); // ← Limpieza global
     }
 
     void Start()
     {
         if (data == null)
         {
-            Debug.LogError("No asignaste Soldier");
+            Debug.LogError("No asignaste Soldier ScriptableObject");
             enabled = false;
             return;
         }
@@ -65,9 +59,7 @@ public class Enemy : MonoBehaviour
             var p = GameObject.FindGameObjectWithTag("Player");
             if (p != null) player = p.transform;
         }
-
-        if (player != null)
-            playerStats = player.GetComponent<PlayerStats>();
+        if (player != null) playerStats = player.GetComponent<PlayerStats>();
 
         UpdateStateUI();
     }
@@ -82,198 +74,48 @@ public class Enemy : MonoBehaviour
 
         FaceTextToCamera();
 
+        // Evita IA mientras está recibiendo daño
         if (state == State.Damage)
             return;
 
-        if (globalAlert && state != State.Chase && state != State.Alert)
+        // Si ya está en alerta global o local, siempre persigue
+        if (hasDetectedPlayer)
         {
-            SetState(State.Alert);
+            if (state != State.Chase)
+                SetState(State.Chase);
+
             return;
         }
 
-        if (state == State.Patrol)
-            PatrolLogic();
-
+        // Si está patrullando o normal
         bool seesPlayer = CheckVision();
 
         if (seesPlayer)
         {
-            hasDetectedOnce = true;
-            globalAlert = true;
+            hasDetectedPlayer = true;
             SetState(State.Chase);
+
+            // ALERTA GLOBAL (si ves al jugador vos)
+            EnemyGlobalAlertSystem.AlertAllEnemies();
+        }
+
+        // Lógica de patrulla (la completás vos)
+        if (state == State.Patrol)
+        {
+            PatrolLogic();  // ← tu lógica acá
         }
     }
 
     void FixedUpdate()
     {
-        if (state == State.Chase || state == State.Alert)
-            ChasePlayerMovement();
-    }
-
-    // ---------- PATRULLA ----------
-    void PatrolLogic()
-    {
-        if (patrolPoints.Length == 0)
+        if (state == State.Chase && player != null && state != State.Dead)
         {
-            SetState(State.Normal);
-            return;
+            // 1) Se mueve hacia el jugador
+            ChasePlayer();
+
+            // 2) Intenta atacar si está cerca
+            TryAttack();
         }
-
-        Transform target = patrolPoints[patrolIndex];
-        Vector3 dir = (target.position - transform.position);
-        dir.y = 0;
-
-        if (dir.magnitude < 0.2f)
-        {
-            patrolWaitTimer += Time.deltaTime;
-            if (patrolWaitTimer >= patrolWaitTime)
-            {
-                patrolWaitTimer = 0;
-                patrolIndex = (patrolIndex + 1) % patrolPoints.Length;
-            }
-            return;
-        }
-
-        Vector3 move = dir.normalized * data.moveSpeed;
-        rb.linearVelocity = new Vector3(move.x, rb.linearVelocity.y, move.z);
-        transform.rotation = Quaternion.LookRotation(dir.normalized);
-    }
-
-    // ---------- CHASE / ALERT ----------
-    void ChasePlayerMovement()
-    {
-        if (player == null) return;
-
-        Vector3 toPlayer = player.position - transform.position;
-        float dist = toPlayer.magnitude;
-
-        toPlayer.y = 0;
-        Vector3 dir = toPlayer.normalized;
-
-        rb.linearVelocity = new Vector3(dir.x * data.moveSpeed, rb.linearVelocity.y, dir.z * data.moveSpeed);
-
-        transform.rotation = Quaternion.LookRotation(dir);
-
-        attackTimer += Time.deltaTime;
-
-        if (dist < attackRange)
-        {
-            TryAttackPlayer();
-        }
-    }
-
-    void TryAttackPlayer()
-    {
-        if (attackTimer < attackCooldown) return;
-
-        attackTimer = 0;
-
-        if (playerStats != null)
-        {
-            playerStats.TakeDamage(damagePerHit);
-            Debug.Log("Jugador recibe daño: " + damagePerHit);
-        }
-    }
-
-    // ---------- DETECCIÓN ----------
-    bool CheckVision()
-    {
-        if (player == null) return false;
-
-        Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
-        Vector3 toPlayer = (player.position + Vector3.up * 1f) - eyePos;
-
-        float dist = toPlayer.magnitude;
-        if (dist > data.viewDistance) return false;
-
-        Vector3 flatDir = toPlayer;
-        flatDir.y = 0f;
-
-        float angle = Vector3.Angle(transform.forward, flatDir);
-        if (angle > data.viewAngle) return false;
-
-        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
-        {
-            if (hit.collider.transform != player)
-                return false;
-        }
-
-        return true;
-    }
-
-    // ---------- DAÑO ----------
-    public void TakeDamage(float dmg)
-    {
-        if (state == State.Dead) return;
-
-        health -= dmg;
-        if (health <= 0)
-        {
-            Die();
-            return;
-        }
-
-        if (!hasDetectedOnce)
-            StartCoroutine(AlertAfter3Sec()); // si no lo matan, entra en alerta
-
-        SetState(State.Damage);
-        StopAllCoroutines();
-        StartCoroutine(BackToChase());
-    }
-
-    IEnumerator AlertAfter3Sec()
-    {
-        yield return new WaitForSeconds(3f);
-        if (state != State.Dead)
-        {
-            globalAlert = true;
-            SetState(State.Alert);
-        }
-    }
-
-    IEnumerator BackToChase()
-    {
-        yield return new WaitForSeconds(0.15f);
-        if (globalAlert) SetState(State.Alert);
-        else if (hasDetectedOnce) SetState(State.Chase);
-        else SetState(State.Patrol);
-    }
-
-    void Die()
-    {
-        state = State.Dead;
-        UpdateStateUI();
-
-        foreach (var r in GetComponentsInChildren<Renderer>())
-            r.enabled = false;
-
-        foreach (var c in GetComponentsInChildren<Collider>())
-            c.enabled = false;
-
-        rb.useGravity = false;
-        rb.linearVelocity = Vector3.zero;
-        rb.isKinematic = true;
-
-        StartCoroutine(HideStateText());
-    }
-
-    IEnumerator HideStateText()
-    {
-        yield return new WaitForSeconds(3f);
-        if (stateText != null) stateText.gameObject.SetActive(false);
-    }
-
-    // ---------- UTILS ----------
-    void SetState(State s)
-    {
-        state = s;
-        UpdateStateUI();
-    }
-
-    void UpdateStateUI()
-    {
-        if (stateText != null)
-            stateText.text = state.ToString().ToLower();
     }
 
     void FaceTextToCamera()
@@ -289,19 +131,175 @@ public class Enemy : MonoBehaviour
         }
     }
 
+    // --- MOVIMIENTO DE PERSECUCIÓN ---
+    void ChasePlayer()
+    {
+        if (rb == null || player == null) return;
+
+        Vector3 toPlayer = player.position - transform.position;
+        toPlayer.y = 0f;
+        Vector3 dir = toPlayer.normalized;
+
+        rb.linearVelocity = new Vector3(
+            dir.x * data.moveSpeed,
+            rb.linearVelocity.y,
+            dir.z * data.moveSpeed
+        );
+
+        if (dir.sqrMagnitude > 0.0001f)
+            transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
+    }
+
+    // --- VISIÓN ---
+    bool CheckVision()
+    {
+        if (player == null) return false;
+
+        Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
+        Vector3 toPlayer = (player.position + Vector3.up) - eyePos;
+
+        float dist = toPlayer.magnitude;
+        if (dist > data.viewDistance) return false;
+
+        Vector3 flatDir = toPlayer; flatDir.y = 0;
+        Vector3 forward = transform.forward; forward.y = 0;
+        float angle = Vector3.Angle(forward, flatDir);
+
+        if (angle > data.viewAngle) return false;
+
+        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
+        {
+            if (hit.collider.transform != player)
+                return false;
+        }
+
+        return true;
+    }
+
+    // --- DAÑO ---
+    public void TakeDamage(float dmg)
+    {
+        if (state == State.Dead) return;
+
+        health -= dmg;
+
+        // EN ALERTA SI TE DISPARAN
+        EnemyGlobalAlertSystem.AlertAllEnemies();
+
+        if (health <= 0)
+        {
+            Die();
+            return;
+        }
+
+        SetState(State.Damage);
+        StopAllCoroutines();
+        StartCoroutine(BackToChase());
+    }
+
+    IEnumerator BackToChase()
+    {
+        yield return new WaitForSeconds(0.25f);
+
+        if (hasDetectedPlayer) SetState(State.Chase);
+        else SetState(State.Patrol);
+    }
+
+    void Die()
+    {
+        state = State.Dead;
+        UpdateStateUI();
+
+        foreach (var r in GetComponentsInChildren<Renderer>())
+        {
+            if (stateText != null && r.gameObject == stateText.gameObject) continue;
+            r.enabled = false;
+        }
+
+        foreach (var c in GetComponentsInChildren<Collider>())
+            c.enabled = false;
+
+        if (rb != null)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            rb.isKinematic = true;
+        }
+
+        StartCoroutine(HideStateTextAfterDelay());
+    }
+
+    // --- ESTADOS ---
+    void SetState(State s)
+    {
+        state = s;
+        UpdateStateUI();
+    }
+
+    public void ForceAlert()
+    {
+        if (state == State.Dead) return;
+
+        hasDetectedPlayer = true;
+        SetState(State.Chase);
+    }
+
+    void UpdateStateUI()
+    {
+        if (stateText != null)
+            stateText.text = state.ToString().ToLower();
+    }
+
+    // --- PATRULLA (vos completás aquí tu recorrido actual) ---
+    void PatrolLogic()
+    {
+        // ACA PEGÁS tu lógica actual de patrulla
+        // Sin cambiar nombres ni nada
+    }
+
+    // --- DEBUG ---
     void OnDrawGizmosSelected()
     {
         if (data == null) return;
 
         Gizmos.color = Color.yellow;
-
         Vector3 eye = transform.position + Vector3.up * data.eyeHeight;
 
-        Vector3 left = Quaternion.Euler(0, -data.viewAngle, 0) * transform.forward;
-        Vector3 right = Quaternion.Euler(0, data.viewAngle, 0) * transform.forward;
-
-        Gizmos.DrawRay(eye, left * data.viewDistance);
-        Gizmos.DrawRay(eye, right * data.viewDistance);
-        Gizmos.DrawRay(eye, transform.forward * data.viewDistance);
+        int steps = 20;
+        for (int i = -steps; i <= steps; i++)
+        {
+            float t = (float)i / steps;
+            float ang = t * data.viewAngle;
+            Quaternion rot = Quaternion.AngleAxis(ang, Vector3.up);
+            Vector3 dir = rot * transform.forward;
+            Gizmos.DrawLine(eye, eye + dir.normalized * data.viewDistance);
+        }
     }
+
+    IEnumerator HideStateTextAfterDelay()
+    {
+        yield return new WaitForSeconds(3f);
+        if (stateText != null) stateText.gameObject.SetActive(false);
+    }
+    void TryAttack()
+    {
+        // cooldown
+        if (Time.time < nextAttackTime)
+            return;
+
+        // distancia al jugador
+        float dist = Vector3.Distance(transform.position, player.position);
+
+        if (dist <= attackRange)
+        {
+            nextAttackTime = Time.time + attackRate;
+
+            if (playerStats != null)
+            {
+                playerStats.TakeDamage((int)attackDamage);
+                Debug.Log("☠ El jugador recibió daño: " + attackDamage);
+            }
+        }
+    }
+
 }

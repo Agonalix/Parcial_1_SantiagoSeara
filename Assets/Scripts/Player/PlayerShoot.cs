@@ -96,16 +96,24 @@ public class PlayerShoot : MonoBehaviour
 
         if (Physics.Raycast(shootOrigin, shootDir, out RaycastHit hit, range, mask, QueryTriggerInteraction.Collide))
         {
-            // Buscar Enemy en el objeto golpeado o en sus padres
-            if (hit.collider.TryGetComponent<Enemy>(out var e) || (e = hit.collider.GetComponentInParent<Enemy>()) != null)
+            // --- SOLDIER ---
+            Enemy enemy = hit.collider.GetComponentInParent<Enemy>();
+            if (enemy != null)
             {
-                e.TakeDamage(damage);
-                Debug.Log("✔ Enemy: damage");
+                enemy.TakeDamage(damage);
+                Debug.Log("✔ Soldier recibió daño");
+                return;
             }
-            else
+
+            // --- CAMERA ---
+            SurveillanceCamera camScript = hit.collider.GetComponentInParent<SurveillanceCamera>();
+            if (camScript != null)
             {
-                Debug.Log($"Ray hit {hit.collider.name} (sin Enemy en padres)");
+                camScript.TakeDamage(damage);
+                Debug.Log("📹 Cámara recibió daño");
+                return;
             }
+            Debug.Log($"Ray hit {hit.collider.name} (sin Enemy ni Camera)");
         }
     }
 
