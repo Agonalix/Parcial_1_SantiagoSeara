@@ -1,44 +1,59 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
+
 public class Enemy : MonoBehaviour
 {
-    public enum State { Normal, Chase, Damage, Dead }
+    public enum State { Patrol, Normal, Chase, Alert, Damage, Dead }
 
-    [Header("Config (ScriptableObject)")]
+    [Header("Config")]
     public Soldier data;
 
     [Header("Estado actual")]
-    public State state = State.Normal;
+    public State state = State.Patrol;
 
     [Header("Referencias")]
     public Transform player;
     PlayerStats playerStats;
 
     [Header("UI Estado")]
-    public TextMeshPro stateText; // un TextMeshPro flotando sobre la cabeza del enemigo
+    public TextMeshPro stateText;
     public float textHeight = 2f;
 
-    float health;
-    bool hasDetectedPlayer = false;  // si detectó una vez, persigue siempre
+    [Header("Patrulla")]
+    public Transform[] patrolPoints;
+    int patrolIndex = 0;
+    public float patrolWaitTime = 1f;
+    float patrolWaitTimer;
 
-    // Rigidbody
+    [Header("Ataque")]
+    public float attackRange = 1.5f;
+    public int damagePerHit = 10;
+    public float attackCooldown = 1f;
+    float attackTimer;
+
     Rigidbody rb;
+    float health;
+    bool hasDetectedOnce = false;
+
+    // ALERTA GLOBAL
+    public static bool globalAlert = false;
 
     void Awake()
     {
         rb = GetComponent<Rigidbody>();
         if (rb == null)
-        {
-            Debug.LogError("Enemy necesita un Rigidbody en el mismo GameObject.");
-        }
+            Debug.LogError("Enemy necesita Rigidbody");
+
+        rb.freezeRotation = true;
     }
 
     void Start()
     {
         if (data == null)
         {
-            Debug.LogError("No asignaste Soldier ScriptableObject");
+            Debug.LogError("No asignaste Soldier");
             enabled = false;
             return;
         }
@@ -50,7 +65,9 @@ public class Enemy : MonoBehaviour
             var p = GameObject.FindGameObjectWithTag("Player");
             if (p != null) player = p.transform;
         }
-        if (player != null) playerStats = player.GetComponent<PlayerStats>();
+
+        if (player != null)
+            playerStats = player.GetComponent<PlayerStats>();
 
         UpdateStateUI();
     }
@@ -59,80 +76,106 @@ public class Enemy : MonoBehaviour
     {
         if (state == State.Dead)
         {
-            // solo mantenemos el texto mirando a la cámara
             FaceTextToCamera();
             return;
         }
 
-        // siempre mira la UI hacia la cámara
         FaceTextToCamera();
 
-        // si está en Damage, no hacemos lógica de IA
         if (state == State.Damage)
             return;
 
-        // si ya detectó una vez → siempre persigue
-        if (hasDetectedPlayer)
+        if (globalAlert && state != State.Chase && state != State.Alert)
         {
-            if (state != State.Chase) SetState(State.Chase);
-            return; // el movimiento lo hacemos en FixedUpdate
+            SetState(State.Alert);
+            return;
         }
 
-        // si todavía no detectó
+        if (state == State.Patrol)
+            PatrolLogic();
+
         bool seesPlayer = CheckVision();
 
-        if (state == State.Normal && seesPlayer)
+        if (seesPlayer)
         {
-            hasDetectedPlayer = true;
+            hasDetectedOnce = true;
+            globalAlert = true;
             SetState(State.Chase);
         }
     }
 
     void FixedUpdate()
     {
-        if (state == State.Chase && player != null && state != State.Dead)
-        {
-            ChasePlayer();
-        }
+        if (state == State.Chase || state == State.Alert)
+            ChasePlayerMovement();
     }
 
-    void FaceTextToCamera()
+    // ---------- PATRULLA ----------
+    void PatrolLogic()
     {
-        if (stateText == null) return;
-
-        var cam = Camera.main;
-        if (cam != null)
+        if (patrolPoints.Length == 0)
         {
-            stateText.transform.position = transform.position + Vector3.up * textHeight;
-            stateText.transform.rotation = Quaternion.LookRotation(
-                stateText.transform.position - cam.transform.position
-            );
+            SetState(State.Normal);
+            return;
         }
+
+        Transform target = patrolPoints[patrolIndex];
+        Vector3 dir = (target.position - transform.position);
+        dir.y = 0;
+
+        if (dir.magnitude < 0.2f)
+        {
+            patrolWaitTimer += Time.deltaTime;
+            if (patrolWaitTimer >= patrolWaitTime)
+            {
+                patrolWaitTimer = 0;
+                patrolIndex = (patrolIndex + 1) % patrolPoints.Length;
+            }
+            return;
+        }
+
+        Vector3 move = dir.normalized * data.moveSpeed;
+        rb.linearVelocity = new Vector3(move.x, rb.linearVelocity.y, move.z);
+        transform.rotation = Quaternion.LookRotation(dir.normalized);
     }
 
-    // --- MOVIMIENTO DE PERSECUCIÓN (con Rigidbody) ---
-    void ChasePlayer()
+    // ---------- CHASE / ALERT ----------
+    void ChasePlayerMovement()
     {
-        if (rb == null || player == null) return;
+        if (player == null) return;
 
-        // Vector hacia el jugador PERMANENTE y sin frenar
         Vector3 toPlayer = player.position - transform.position;
-        toPlayer.y = 0f; // no saltar
+        float dist = toPlayer.magnitude;
 
-        // si está extremadamente cerca, seguir igualmente
+        toPlayer.y = 0;
         Vector3 dir = toPlayer.normalized;
 
-        // velocidad constante hacia el jugador
         rb.linearVelocity = new Vector3(dir.x * data.moveSpeed, rb.linearVelocity.y, dir.z * data.moveSpeed);
 
-        // rota hacia el jugador
-        if (dir.sqrMagnitude > 0.0001f)
+        transform.rotation = Quaternion.LookRotation(dir);
+
+        attackTimer += Time.deltaTime;
+
+        if (dist < attackRange)
         {
-            transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
+            TryAttackPlayer();
         }
     }
 
-    // --- VISIÓN: CONO + RAYCAST DE OBSTRUCCIÓN ---
+    void TryAttackPlayer()
+    {
+        if (attackTimer < attackCooldown) return;
+
+        attackTimer = 0;
+
+        if (playerStats != null)
+        {
+            playerStats.TakeDamage(damagePerHit);
+            Debug.Log("Jugador recibe daño: " + damagePerHit);
+        }
+    }
+
+    // ---------- DETECCIÓN ----------
     bool CheckVision()
     {
         if (player == null) return false;
@@ -143,16 +186,14 @@ public class Enemy : MonoBehaviour
         float dist = toPlayer.magnitude;
         if (dist > data.viewDistance) return false;
 
-        Vector3 flatDir = toPlayer; flatDir.y = 0f;
-        Vector3 forward = transform.forward; forward.y = 0f;
-        float angle = Vector3.Angle(forward, flatDir);
+        Vector3 flatDir = toPlayer;
+        flatDir.y = 0f;
 
+        float angle = Vector3.Angle(transform.forward, flatDir);
         if (angle > data.viewAngle) return false;
 
-        // RAYCAST → si golpea una pared ANTES que el jugador, NO lo ve
         if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
         {
-            // si pegó a algo antes de llegar al jugador → obstruido
             if (hit.collider.transform != player)
                 return false;
         }
@@ -160,7 +201,7 @@ public class Enemy : MonoBehaviour
         return true;
     }
 
-    // --- DAÑO ---
+    // ---------- DAÑO ----------
     public void TakeDamage(float dmg)
     {
         if (state == State.Dead) return;
@@ -172,47 +213,57 @@ public class Enemy : MonoBehaviour
             return;
         }
 
+        if (!hasDetectedOnce)
+            StartCoroutine(AlertAfter3Sec()); // si no lo matan, entra en alerta
+
         SetState(State.Damage);
         StopAllCoroutines();
         StartCoroutine(BackToChase());
     }
 
+    IEnumerator AlertAfter3Sec()
+    {
+        yield return new WaitForSeconds(3f);
+        if (state != State.Dead)
+        {
+            globalAlert = true;
+            SetState(State.Alert);
+        }
+    }
+
     IEnumerator BackToChase()
     {
-        yield return new WaitForSeconds(0.1f);
-
-        // si detectó una vez → siempre sigue en chase
-        if (hasDetectedPlayer) SetState(State.Chase);
-        else SetState(State.Normal);
+        yield return new WaitForSeconds(0.15f);
+        if (globalAlert) SetState(State.Alert);
+        else if (hasDetectedOnce) SetState(State.Chase);
+        else SetState(State.Patrol);
     }
 
     void Die()
     {
         state = State.Dead;
-        UpdateStateUI(); // muestra "dead"
+        UpdateStateUI();
 
-        // Desactivar mesh del enemigo, pero NO el texto
         foreach (var r in GetComponentsInChildren<Renderer>())
-        {
-            if (stateText != null && r.gameObject == stateText.gameObject) continue;
             r.enabled = false;
-        }
 
         foreach (var c in GetComponentsInChildren<Collider>())
             c.enabled = false;
 
-        if (rb != null)
-        {
-            rb.useGravity = false;
-            rb.linearVelocity = Vector3.zero;
-            rb.isKinematic = true;
-        }
+        rb.useGravity = false;
+        rb.linearVelocity = Vector3.zero;
+        rb.isKinematic = true;
 
-        // Ocultar el texto después de 3 segundos
-        StartCoroutine(HideStateTextAfterDelay());
+        StartCoroutine(HideStateText());
     }
 
-    // --- ESTADOS ---
+    IEnumerator HideStateText()
+    {
+        yield return new WaitForSeconds(3f);
+        if (stateText != null) stateText.gameObject.SetActive(false);
+    }
+
+    // ---------- UTILS ----------
     void SetState(State s)
     {
         state = s;
@@ -222,37 +273,35 @@ public class Enemy : MonoBehaviour
     void UpdateStateUI()
     {
         if (stateText != null)
-        {
             stateText.text = state.ToString().ToLower();
+    }
+
+    void FaceTextToCamera()
+    {
+        if (stateText == null) return;
+
+        var cam = Camera.main;
+        if (cam != null)
+        {
+            stateText.transform.position = transform.position + Vector3.up * textHeight;
+            stateText.transform.rotation =
+                Quaternion.LookRotation(stateText.transform.position - cam.transform.position);
         }
     }
 
-    // --- DEBUG DEL CONO ---
     void OnDrawGizmosSelected()
     {
         if (data == null) return;
 
         Gizmos.color = Color.yellow;
+
         Vector3 eye = transform.position + Vector3.up * data.eyeHeight;
 
-        // forward
-        Gizmos.DrawLine(eye, eye + transform.forward * data.viewDistance);
+        Vector3 left = Quaternion.Euler(0, -data.viewAngle, 0) * transform.forward;
+        Vector3 right = Quaternion.Euler(0, data.viewAngle, 0) * transform.forward;
 
-        // límites del cono
-        int steps = 20;
-        for (int i = -steps; i <= steps; i++)
-        {
-            float t = (float)i / steps;
-            float ang = t * data.viewAngle;
-            Quaternion rot = Quaternion.AngleAxis(ang, Vector3.up);
-            Vector3 dir = rot * transform.forward;
-            Gizmos.DrawLine(eye, eye + dir.normalized * data.viewDistance);
-        }
-    }
-
-    IEnumerator HideStateTextAfterDelay()
-    {
-        yield return new WaitForSeconds(3f);
-        if (stateText != null) stateText.gameObject.SetActive(false);
+        Gizmos.DrawRay(eye, left * data.viewDistance);
+        Gizmos.DrawRay(eye, right * data.viewDistance);
+        Gizmos.DrawRay(eye, transform.forward * data.viewDistance);
     }
 }
