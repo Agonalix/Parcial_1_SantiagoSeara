@@ -4,7 +4,7 @@ using TMPro;
 
 public class Enemy : MonoBehaviour
 {
-    public enum State { Normal, Patrol, Chase, Damage, Dead }
+    public enum State { Normal, Patrol, Alert, Chase, Damage, Dead }
 
     [Header("Config (ScriptableObject)")]
     public Soldier data;
@@ -16,14 +16,19 @@ public class Enemy : MonoBehaviour
     public Transform player;
     PlayerStats playerStats;
 
+    [Header("Patrulla")]
+    public PatrolPath patrolPath;
+    public int patrolIndex = 0;
+    public float patrolSpeed = 2f;
+    public float patrolReachDistance = 0.3f;
+
     [Header("UI Estado")]
     public TextMeshPro stateText;
     public float textHeight = 2f;
 
-    [Header("Ataque")]
+    [Header("Ataque (a distancia)")]
     public float attackDamage = 10f;
-    public float attackRate = 1.2f;  // 1 golpe cada 1.2 segundos
-    public float attackRange = 1.5f; // distancia a la que puede golpear
+    public float attackRate = 1.2f;
     float nextAttackTime;
 
     float health;
@@ -34,13 +39,12 @@ public class Enemy : MonoBehaviour
     void Awake()
     {
         rb = GetComponent<Rigidbody>();
-
-        EnemyGlobalAlertSystem.Register(this);  // ← Registro global
+        EnemyGlobalAlertSystem.Register(this);
     }
 
     void OnDestroy()
     {
-        EnemyGlobalAlertSystem.Unregister(this); // ← Limpieza global
+        EnemyGlobalAlertSystem.Unregister(this);
     }
 
     void Start()
@@ -59,7 +63,9 @@ public class Enemy : MonoBehaviour
             var p = GameObject.FindGameObjectWithTag("Player");
             if (p != null) player = p.transform;
         }
-        if (player != null) playerStats = player.GetComponent<PlayerStats>();
+
+        if (player != null)
+            playerStats = player.GetComponent<PlayerStats>();
 
         UpdateStateUI();
     }
@@ -74,11 +80,10 @@ public class Enemy : MonoBehaviour
 
         FaceTextToCamera();
 
-        // Evita IA mientras está recibiendo daño
         if (state == State.Damage)
             return;
 
-        // Si ya está en alerta global o local, siempre persigue
+        // Si ya está alertado → siempre va a chase
         if (hasDetectedPlayer)
         {
             if (state != State.Chase)
@@ -87,33 +92,25 @@ public class Enemy : MonoBehaviour
             return;
         }
 
-        // Si está patrullando o normal
+        // Revisión de visión
         bool seesPlayer = CheckVision();
 
         if (seesPlayer)
         {
             hasDetectedPlayer = true;
-            SetState(State.Chase);
-
-            // ALERTA GLOBAL (si ves al jugador vos)
+            TriggerAlert(); // estado alert -> luego chase
             EnemyGlobalAlertSystem.AlertAllEnemies();
         }
 
-        // Lógica de patrulla (la completás vos)
         if (state == State.Patrol)
-        {
-            PatrolLogic();  // ← tu lógica acá
-        }
+            PatrolLogic();
     }
 
     void FixedUpdate()
     {
-        if (state == State.Chase && player != null && state != State.Dead)
+        if (state == State.Chase && player != null)
         {
-            // 1) Intenta atacar si está cerca
             TryAttack();
-
-            // 2) Se mueve hacia el jugador
             ChasePlayer();
         }
     }
@@ -131,13 +128,13 @@ public class Enemy : MonoBehaviour
         }
     }
 
-    // --- MOVIMIENTO DE PERSECUCIÓN ---
+    // ===== PERSECUCIÓN =====
     void ChasePlayer()
     {
         if (rb == null || player == null) return;
 
         Vector3 toPlayer = player.position - transform.position;
-        toPlayer.y = 0f;
+        toPlayer.y = 0;
         Vector3 dir = toPlayer.normalized;
 
         rb.linearVelocity = new Vector3(
@@ -150,7 +147,7 @@ public class Enemy : MonoBehaviour
             transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
     }
 
-    // --- VISIÓN ---
+    // ===== VISIÓN =====
     bool CheckVision()
     {
         if (player == null) return false;
@@ -163,8 +160,8 @@ public class Enemy : MonoBehaviour
 
         Vector3 flatDir = toPlayer; flatDir.y = 0;
         Vector3 forward = transform.forward; forward.y = 0;
-        float angle = Vector3.Angle(forward, flatDir);
 
+        float angle = Vector3.Angle(forward, flatDir);
         if (angle > data.viewAngle) return false;
 
         if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
@@ -176,24 +173,29 @@ public class Enemy : MonoBehaviour
         return true;
     }
 
-    // --- DAÑO ---
+    // ===== DAÑO =====
     public void TakeDamage(float dmg)
     {
         if (state == State.Dead) return;
 
+        // 1) cancelo cualquier coroutine anterior (damage / alert viejos)
+        StopAllCoroutines();
+
+        // 2) aplico daño
         health -= dmg;
 
-        // EN ALERTA SI TE DISPARAN
-        EnemyGlobalAlertSystem.AlertAllEnemies();
-
+        // 3) si murió, chau
         if (health <= 0)
         {
             Die();
             return;
         }
 
+        // 4) arranco el contador de 3 segundos para ALERTA GLOBAL
+        StartCoroutine(AlertIfNotKilledSoon());
+
+        // 5) feedback de daño corto, luego vuelve a patrol / chase
         SetState(State.Damage);
-        StopAllCoroutines();
         StartCoroutine(BackToChase());
     }
 
@@ -229,19 +231,97 @@ public class Enemy : MonoBehaviour
         StartCoroutine(HideStateTextAfterDelay());
     }
 
-    // --- ESTADOS ---
-    void SetState(State s)
+    // ===== ALERTA =====
+    public void TriggerAlert()
     {
-        state = s;
-        UpdateStateUI();
+        if (state == State.Dead) return;
+
+        SetState(State.Alert);
+        StartCoroutine(AlertToChase());
+    }
+
+    IEnumerator AlertToChase()
+    {
+        yield return new WaitForSeconds(0.5f);
+        SetState(State.Chase);
+        hasDetectedPlayer = true;
     }
 
     public void ForceAlert()
     {
         if (state == State.Dead) return;
-
+        TriggerAlert();
         hasDetectedPlayer = true;
-        SetState(State.Chase);
+    }
+
+    IEnumerator AlertIfNotKilledSoon()
+    {
+        yield return new WaitForSeconds(3f);
+
+        if (health > 0)
+        {
+            EnemyGlobalAlertSystem.AlertAllEnemies();
+            Debug.Log("⚠ ALERTA GLOBAL por enemigo herido");
+        }
+    }
+
+    // ===== ATAQUE A DISTANCIA =====
+    void TryAttack()
+    {
+        if (Time.time < nextAttackTime)
+            return;
+
+        if (!CheckVision())
+            return;
+
+        Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
+        Vector3 toPlayer = (player.position + Vector3.up) - eyePos;
+
+        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
+        {
+            if (hit.collider.transform != player)
+                return;
+        }
+
+        nextAttackTime = Time.time + attackRate;
+
+        if (playerStats != null)
+        {
+            playerStats.TakeDamage((int)attackDamage);
+            Debug.Log("🔫 SOLDIER disparó y dañó al jugador: " + attackDamage);
+        }
+    }
+
+    // ===== PATRULLA =====
+    void PatrolLogic()
+    {
+        if (patrolPath == null || patrolPath.points.Length == 0)
+            return;
+
+        Transform target = patrolPath.points[patrolIndex];
+        Vector3 toTarget = target.position - transform.position;
+        toTarget.y = 0;
+
+        Vector3 dir = toTarget.normalized;
+
+        rb.linearVelocity = new Vector3(
+            dir.x * patrolSpeed,
+            rb.linearVelocity.y,
+            dir.z * patrolSpeed
+        );
+
+        if (dir.sqrMagnitude > 0.0001f)
+            transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
+
+        if (toTarget.magnitude < patrolReachDistance)
+            patrolIndex = (patrolIndex + 1) % patrolPath.points.Length;
+    }
+
+    // ===== MISC =====
+    void SetState(State s)
+    {
+        state = s;
+        UpdateStateUI();
     }
 
     void UpdateStateUI()
@@ -250,14 +330,6 @@ public class Enemy : MonoBehaviour
             stateText.text = state.ToString().ToLower();
     }
 
-    // --- PATRULLA (vos completás aquí tu recorrido actual) ---
-    void PatrolLogic()
-    {
-        // ACA PEGÁS tu lógica actual de patrulla
-        // Sin cambiar nombres ni nada
-    }
-
-    // --- DEBUG ---
     void OnDrawGizmosSelected()
     {
         if (data == null) return;
@@ -281,33 +353,4 @@ public class Enemy : MonoBehaviour
         yield return new WaitForSeconds(3f);
         if (stateText != null) stateText.gameObject.SetActive(false);
     }
-    void TryAttack()
-    {
-        if (Time.time < nextAttackTime)
-            return;
-
-        // 1) chequeo si realmente puede ver al jugador (misma lógica del cono)
-        if (!CheckVision())
-            return;
-
-        // 2) chequear si no hay paredes en el medio
-        Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
-        Vector3 toPlayer = (player.position + Vector3.up * 1f) - eyePos;
-
-        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
-        {
-            if (hit.collider.transform != player)
-                return; // una pared lo tapa → no dispara
-        }
-
-        // 3) si llega acá → DISPARA
-        nextAttackTime = Time.time + attackRate;
-
-        if (playerStats != null)
-        {
-            playerStats.TakeDamage((int)attackDamage);
-            Debug.Log("🔫 SOLDIER disparó y dañó al jugador: " + attackDamage);
-        }
-    }
-
 }
