@@ -110,11 +110,11 @@ public class Enemy : MonoBehaviour
     {
         if (state == State.Chase && player != null && state != State.Dead)
         {
-            // 1) Se mueve hacia el jugador
-            ChasePlayer();
-
-            // 2) Intenta atacar si está cerca
+            // 1) Intenta atacar si está cerca
             TryAttack();
+
+            // 2) Se mueve hacia el jugador
+            ChasePlayer();
         }
     }
 
@@ -283,22 +283,30 @@ public class Enemy : MonoBehaviour
     }
     void TryAttack()
     {
-        // cooldown
         if (Time.time < nextAttackTime)
             return;
 
-        // distancia al jugador
-        float dist = Vector3.Distance(transform.position, player.position);
+        // 1) chequeo si realmente puede ver al jugador (misma lógica del cono)
+        if (!CheckVision())
+            return;
 
-        if (dist <= attackRange)
+        // 2) chequear si no hay paredes en el medio
+        Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
+        Vector3 toPlayer = (player.position + Vector3.up * 1f) - eyePos;
+
+        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
         {
-            nextAttackTime = Time.time + attackRate;
+            if (hit.collider.transform != player)
+                return; // una pared lo tapa → no dispara
+        }
 
-            if (playerStats != null)
-            {
-                playerStats.TakeDamage((int)attackDamage);
-                Debug.Log("☠ El jugador recibió daño: " + attackDamage);
-            }
+        // 3) si llega acá → DISPARA
+        nextAttackTime = Time.time + attackRate;
+
+        if (playerStats != null)
+        {
+            playerStats.TakeDamage((int)attackDamage);
+            Debug.Log("🔫 SOLDIER disparó y dañó al jugador: " + attackDamage);
         }
     }
 
