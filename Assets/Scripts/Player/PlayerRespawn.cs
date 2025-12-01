@@ -3,9 +3,9 @@ using UnityEngine.SceneManagement;
 
 public class PlayerRespawn : MonoBehaviour
 {
-    public PlayerStats stats;          // arrastrá PlayerStats desde el Inspector
-    public PlayerShoot shoot;          // arrastrá PlayerShoot
-    public Transform spawnPoint;       // empty con la posición de respawn
+    public PlayerStats stats;      // arrastrá PlayerStats desde el Inspector
+    public PlayerShoot shoot;      // arrastrá PlayerShoot
+    public Transform spawnPoint;   // empty con la posición de respawn
 
     CharacterController cc;
 
@@ -39,11 +39,12 @@ public class PlayerRespawn : MonoBehaviour
 
     void RespawnPlayer()
     {
-        // 1) Resetear vida
+        // 1) Resetear vida del jugador
         stats.health = stats.maxHealth;
 
-        // 2) Resetear balas actuales (no los mags limitados todavía)
-        shoot.bulletsInMag = shoot.magSize;
+        // 2) Resetear munición (balas + cargadores)
+        if (shoot != null)
+            shoot.ResetAmmo();
 
         // 3) Resetear posición de manera SEGURA
         cc.enabled = false;
@@ -51,13 +52,13 @@ public class PlayerRespawn : MonoBehaviour
         transform.rotation = spawnPoint.rotation;
         cc.enabled = true;
 
-        // 4) Resetear velocidad interna por si acaso
+        // 4) Resetear velocidad por si acaso
         if (TryGetComponent<Rigidbody>(out Rigidbody rb))
         {
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
         }
 
-        Debug.Log("🔄 Jugador reaparecido");
+        Debug.Log("🔄 Jugador reaparecido con munición y vida restauradas");
     }
 }

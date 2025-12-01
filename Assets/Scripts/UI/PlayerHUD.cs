@@ -35,6 +35,7 @@ public class PlayerHUD : MonoBehaviour
 
     void Update()
     {
+        // --- VIDA ---
         if (playerStats != null)
         {
             if (healthBar != null)
@@ -44,9 +45,10 @@ public class PlayerHUD : MonoBehaviour
                 healthText.text = playerStats.health.ToString();
         }
 
+        // --- BALAS ---
         if (playerShoot != null && ammoText != null)
         {
-            ammoText.text = $"{playerShoot.bulletsInMag}/{playerShoot.magSize}";
+            ammoText.text = $"{playerShoot.bulletsInMag}/{playerShoot.remainingMags}";
         }
     }
 }

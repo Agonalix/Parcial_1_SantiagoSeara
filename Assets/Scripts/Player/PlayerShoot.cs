@@ -5,18 +5,22 @@ public class PlayerShoot : MonoBehaviour
     [Header("Disparo (semiautomático)")]
     public float damage = 20f;
     public float range = 25f;
-    public float fireRate = 2f; // disparos por segundo
+    public float fireRate = 2f;
 
     [Header("Cargador")]
     public int magSize = 15;
     public int bulletsInMag = 15;
+
+    // --- NUEVO: Cargadores limitados ---
+    public int remainingMags = 2;   // la consigna pide 2 cargadores extras
+
     public KeyCode reloadKey = KeyCode.R;
 
     [Header("Masks")]
-    public LayerMask hittableLayers; // set en Inspector: Enemy y Environment, excluir Player
+    public LayerMask hittableLayers;
 
     [Header("Refs")]
-    public Camera cam; // arrastrá la Main Camera
+    public Camera cam;
 
     float nextAllowed;
 
@@ -28,99 +32,104 @@ public class PlayerShoot : MonoBehaviour
 
         magSize = 15;
         bulletsInMag = magSize;
+
+        remainingMags = 2; // reset por si usás Reset()
     }
 
     void Update()
     {
         if (cam == null) return;
 
-        // Recargar con R
+        // Recargar
         if (Input.GetKeyDown(reloadKey))
         {
             TryReload();
         }
 
-        // Disparo semiautomático con botón izquierdo
+        // Disparo semiautomático
         if (Input.GetMouseButtonDown(0) && Time.time >= nextAllowed)
         {
-            // Si no hay balas en el cargador, no dispara
             if (bulletsInMag <= 0)
             {
-                Debug.Log("Sin balas en el cargador. Recargar con R.");
+                Debug.Log("Sin balas. Recargar con R.");
                 return;
             }
 
             nextAllowed = Time.time + (1f / Mathf.Max(0.01f, fireRate));
-            Shoot();
 
+            Shoot();
             bulletsInMag--;
-            UpdateAmmoUI();
         }
     }
 
     void TryReload()
     {
-        // Si el cargador está lleno → NO hacer absolutamente nada
+        // Si ya está lleno → NO recarga
         if (bulletsInMag >= magSize)
         {
-            Debug.Log("No puedo recargar porque el cargador está completo.");
+            Debug.Log("Cargador lleno, no puedo recargar.");
             return;
         }
 
-        // Cargadores infinitos: simplemente rellenamos
+        // Si no quedan cargadores → NO recarga
+        if (remainingMags <= 0)
+        {
+            Debug.Log("No tengo cargadores restantes.");
+            return;
+        }
+
+        // Usar un cargador
+        remainingMags--;
+
+        // Rellenar el cargador
         bulletsInMag = magSize;
 
-        Debug.Log("Recarga completa.");
-
-        UpdateAmmoUI();
+        Debug.Log($"Recargado. Cargadores restantes: {remainingMags}");
     }
 
     void Shoot()
     {
-        // SIEMPRE usa la proyección de cámara (evita forwards invertidos)
         Ray viewRay = cam.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
-        // Excluir Player por seguridad
         int mask = hittableLayers;
         int playerLayer = LayerMask.NameToLayer("Player");
         if (playerLayer >= 0) mask &= ~(1 << playerLayer);
 
-        // Punto objetivo (lo que ves)
         Vector3 targetPoint = viewRay.origin + viewRay.direction * range;
         if (Physics.Raycast(viewRay, out RaycastHit sightHit, range, mask, QueryTriggerInteraction.Collide))
             targetPoint = sightHit.point;
 
-        // Disparo desde la cámara hacia el punto objetivo
-        Vector3 shootOrigin = cam.transform.position;
-        Vector3 shootDir = (targetPoint - shootOrigin).normalized;
+        Vector3 shootDir = (targetPoint - cam.transform.position).normalized;
 
-        if (Physics.Raycast(shootOrigin, shootDir, out RaycastHit hit, range, mask, QueryTriggerInteraction.Collide))
+        if (Physics.Raycast(cam.transform.position, shootDir, out RaycastHit hit, range, mask, QueryTriggerInteraction.Collide))
         {
-            // --- SOLDIER ---
-            Enemy enemy = hit.collider.GetComponentInParent<Enemy>();
-            if (enemy != null)
+            // Soldier
+            if (hit.collider.TryGetComponent<Enemy>(out var e) ||
+               (e = hit.collider.GetComponentInParent<Enemy>()) != null)
             {
-                enemy.TakeDamage(damage);
+                e.TakeDamage(damage);
                 Debug.Log("✔ Soldier recibió daño");
                 return;
             }
 
-            // --- CAMERA ---
-            SurveillanceCamera camScript = hit.collider.GetComponentInParent<SurveillanceCamera>();
-            if (camScript != null)
+            // Cámara
+            if (hit.collider.TryGetComponent<SurveillanceCamera>(out var camEnemy) ||
+               (camEnemy = hit.collider.GetComponentInParent<SurveillanceCamera>()) != null)
             {
-                camScript.TakeDamage(damage);
+                camEnemy.TakeDamage(damage);
                 Debug.Log("📹 Cámara recibió daño");
                 return;
             }
-            Debug.Log($"Ray hit {hit.collider.name} (sin Enemy ni Camera)");
+
+            Debug.Log($"Ray hit {hit.collider.name}");
         }
     }
-
-    // Después, en el HUD, podés llamar a esto desde otro script
-    void UpdateAmmoUI()
+    public void ResetAmmo()
     {
-        // Acá más adelante linkeás tu UI:
-        // por ejemplo: ammoText.text = bulletsInMag.ToString();
+        // Resetea el cargador actual
+        bulletsInMag = magSize;
+
+        // Resetea los cargadores restantes a 2 (consigna del parcial)
+        remainingMags = 2;
     }
 }
