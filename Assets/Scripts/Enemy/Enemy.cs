@@ -32,7 +32,12 @@ public class Enemy : MonoBehaviour
     float nextAttackTime;
 
     float health;
+
+    // Si detectó al jugador (visión o daño)
     bool hasDetectedPlayer = false;
+
+    // Si este enemigo ya recibió la alerta global
+    bool isGloballyAlerted = false;
 
     Rigidbody rb;
 
@@ -49,6 +54,8 @@ public class Enemy : MonoBehaviour
 
     void Start()
     {
+        rb.freezeRotation = true;
+
         if (data == null)
         {
             Debug.LogError("No asignaste Soldier ScriptableObject");
@@ -83,7 +90,16 @@ public class Enemy : MonoBehaviour
         if (state == State.Damage)
             return;
 
-        // Si ya está alertado → siempre va a chase
+        // SI ESTÁ EN ALERTA GLOBAL → Persigue SIEMPRE
+        if (isGloballyAlerted)
+        {
+            if (state != State.Alert && state != State.Chase)
+                SetState(State.Alert);
+
+            return;
+        }
+
+        // Si detectó localmente → Chase
         if (hasDetectedPlayer)
         {
             if (state != State.Chase)
@@ -92,23 +108,28 @@ public class Enemy : MonoBehaviour
             return;
         }
 
-        // Revisión de visión
+        // VISIÓN
         bool seesPlayer = CheckVision();
 
         if (seesPlayer)
         {
             hasDetectedPlayer = true;
-            TriggerAlert(); // estado alert -> luego chase
+
+            // ALERTA GLOBAL INMEDIATA
             EnemyGlobalAlertSystem.AlertAllEnemies();
+            Debug.Log("👀 Soldier vio al jugador → ALERTA GLOBAL");
+
+            return;
         }
 
+        // PATRULLA
         if (state == State.Patrol)
             PatrolLogic();
     }
 
     void FixedUpdate()
     {
-        if (state == State.Chase && player != null)
+        if ((state == State.Chase || state == State.Alert) && player != null)
         {
             TryAttack();
             ChasePlayer();
@@ -164,7 +185,8 @@ public class Enemy : MonoBehaviour
         float angle = Vector3.Angle(forward, flatDir);
         if (angle > data.viewAngle) return false;
 
-        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
+        if (Physics.Raycast(eyePos, toPlayer.normalized,
+            out RaycastHit hit, data.viewDistance, data.obstructionMask))
         {
             if (hit.collider.transform != player)
                 return false;
@@ -178,33 +200,45 @@ public class Enemy : MonoBehaviour
     {
         if (state == State.Dead) return;
 
-        // 1) cancelo cualquier coroutine anterior (damage / alert viejos)
         StopAllCoroutines();
-
-        // 2) aplico daño
         health -= dmg;
 
-        // 3) si murió, chau
         if (health <= 0)
         {
             Die();
             return;
         }
 
-        // 4) arranco el contador de 3 segundos para ALERTA GLOBAL
+        // --- FIX PARA EL TROPIEZO ---
+        rb.linearVelocity = Vector3.zero; // frena al instante
+
+        // Si quisieras ser más estricto:
+        rb.angularVelocity = Vector3.zero;
+
+        // LOCAL ALERTA (solo este enemigo)
+        hasDetectedPlayer = true;
+
+        // Estado de daño
+        SetState(State.Damage);
+
+        // Timer de 3s para alerta global
         StartCoroutine(AlertIfNotKilledSoon());
 
-        // 5) feedback de daño corto, luego vuelve a patrol / chase
-        SetState(State.Damage);
+        // Vuelve a chase o patrol
         StartCoroutine(BackToChase());
     }
+
 
     IEnumerator BackToChase()
     {
         yield return new WaitForSeconds(0.25f);
 
-        if (hasDetectedPlayer) SetState(State.Chase);
-        else SetState(State.Patrol);
+        if (isGloballyAlerted)
+            SetState(State.Alert);
+        else if (hasDetectedPlayer)
+            SetState(State.Chase);
+        else
+            SetState(State.Patrol);
     }
 
     void Die()
@@ -221,51 +255,36 @@ public class Enemy : MonoBehaviour
         foreach (var c in GetComponentsInChildren<Collider>())
             c.enabled = false;
 
-        if (rb != null)
-        {
-            rb.useGravity = false;
-            rb.linearVelocity = Vector3.zero;
-            rb.isKinematic = true;
-        }
+        rb.useGravity = false;
+        rb.isKinematic = true;
 
         StartCoroutine(HideStateTextAfterDelay());
     }
 
-    // ===== ALERTA =====
-    public void TriggerAlert()
-    {
-        if (state == State.Dead) return;
-
-        SetState(State.Alert);
-        StartCoroutine(AlertToChase());
-    }
-
-    IEnumerator AlertToChase()
-    {
-        yield return new WaitForSeconds(0.5f);
-        SetState(State.Chase);
-        hasDetectedPlayer = true;
-    }
-
+    // ===== ALERTA GLOBAL =====
     public void ForceAlert()
     {
         if (state == State.Dead) return;
-        TriggerAlert();
+
+        isGloballyAlerted = true;
         hasDetectedPlayer = true;
+
+        SetState(State.Alert);
     }
 
     IEnumerator AlertIfNotKilledSoon()
     {
         yield return new WaitForSeconds(3f);
 
-        if (health > 0)
+        // no murió → ALERTA GLOBAL
+        if (!isGloballyAlerted && health > 0)
         {
             EnemyGlobalAlertSystem.AlertAllEnemies();
             Debug.Log("⚠ ALERTA GLOBAL por enemigo herido");
         }
     }
 
-    // ===== ATAQUE A DISTANCIA =====
+    // ===== ATAQUE =====
     void TryAttack()
     {
         if (Time.time < nextAttackTime)
@@ -277,7 +296,8 @@ public class Enemy : MonoBehaviour
         Vector3 eyePos = transform.position + Vector3.up * data.eyeHeight;
         Vector3 toPlayer = (player.position + Vector3.up) - eyePos;
 
-        if (Physics.Raycast(eyePos, toPlayer.normalized, out RaycastHit hit, data.viewDistance, data.obstructionMask))
+        if (Physics.Raycast(eyePos, toPlayer.normalized,
+            out RaycastHit hit, data.viewDistance, data.obstructionMask))
         {
             if (hit.collider.transform != player)
                 return;
@@ -330,6 +350,12 @@ public class Enemy : MonoBehaviour
             stateText.text = state.ToString().ToLower();
     }
 
+    IEnumerator HideStateTextAfterDelay()
+    {
+        yield return new WaitForSeconds(3f);
+        if (stateText != null) stateText.gameObject.SetActive(false);
+    }
+
     void OnDrawGizmosSelected()
     {
         if (data == null) return;
@@ -346,11 +372,5 @@ public class Enemy : MonoBehaviour
             Vector3 dir = rot * transform.forward;
             Gizmos.DrawLine(eye, eye + dir.normalized * data.viewDistance);
         }
-    }
-
-    IEnumerator HideStateTextAfterDelay()
-    {
-        yield return new WaitForSeconds(3f);
-        if (stateText != null) stateText.gameObject.SetActive(false);
     }
 }
