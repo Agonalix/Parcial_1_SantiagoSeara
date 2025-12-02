@@ -12,6 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b98485af1a6238a44be29531a40742d3, type: 3}
   m_Name: Magazine
   m_EditorClassIdentifier: 
-  type: 0
+  type: 1
   healAmount: 30
   magsToAdd: 1
